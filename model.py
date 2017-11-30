@@ -70,17 +70,18 @@ class CycleGAN:
     y = Y_reader.feed()
 
     cycle_loss = self.cycle_consistency_loss(self.G, self.F, x, y)
+    alignment_loss = self.alignment_loss(self.G, self.F, x, y)
 
     # X -> Y
     fake_y = self.G(x)
     G_gan_loss = self.generator_loss(self.D_Y, fake_y, use_lsgan=self.use_lsgan)
-    G_loss =  G_gan_loss + cycle_loss
+    G_loss =  G_gan_loss + cycle_loss + alignment_loss
     D_Y_loss = self.discriminator_loss(self.D_Y, y, self.fake_y, use_lsgan=self.use_lsgan)
 
     # Y -> X
     fake_x = self.F(y)
     F_gan_loss = self.generator_loss(self.D_X, fake_x, use_lsgan=self.use_lsgan)
-    F_loss = F_gan_loss + cycle_loss
+    F_loss = F_gan_loss + cycle_loss + alignment_loss
     D_X_loss = self.discriminator_loss(self.D_X, x, self.fake_x, use_lsgan=self.use_lsgan)
 
     # summary
@@ -94,11 +95,16 @@ class CycleGAN:
     tf.summary.scalar('loss/F', F_gan_loss)
     tf.summary.scalar('loss/D_X', D_X_loss)
     tf.summary.scalar('loss/cycle', cycle_loss)
+    tf.summary.scalar('loss/alignment', alignment_loss)
 
-    tf.summary.image('X/generated', utils.batch_convert2int(self.G(x)))
-    tf.summary.image('X/reconstruction', utils.batch_convert2int(self.F(self.G(x))))
+    G_x,rep_G_x = self.G(x,output_representation=True)
+    tf.summary.image('X/generated', utils.batch_convert2int(G_x))
+    tf.summary.image('X/reconstruction', utils.batch_convert2int(self.F(G_x)))
+    tf.summary.image('X/self_reconstruction', utils.batch_convert2int(self.F(G_x,external_representation = rep_G_x)))
+    F_y,rep_F_y = self.F(y,output_representation=True)
     tf.summary.image('Y/generated', utils.batch_convert2int(self.F(y)))
     tf.summary.image('Y/reconstruction', utils.batch_convert2int(self.G(self.F(y))))
+    tf.summary.image('Y/self_reconstruction', utils.batch_convert2int(self.G(F_y,external_representation = rep_F_y)))
 
     return G_loss, D_Y_loss, F_loss, D_X_loss, fake_y, fake_x
 
@@ -178,3 +184,19 @@ class CycleGAN:
     backward_loss = tf.reduce_mean(tf.abs(G(F(y))-y))
     loss = self.lambda1*forward_loss + self.lambda2*backward_loss
     return loss
+
+  def alignment_loss(self, G, F, x, y):
+    """ alignment loss (L1 norm)
+    When in a separate function from the cycle_consistency_loss, slower as G_x
+    and F_y need to be evaluated twice, merge!
+    """
+    # Combine the encoder of G and decoder of F
+    G_x,rep_G_x = G(x,output_representation=True)
+    x_alignment_loss = tf.reduce_mean(tf.abs(F(G_x,external_representation = rep_G_x)-x))
+
+    # Combine the encoder of F and decoder of F
+    F_y,rep_F_y = F(y,output_representation=True)
+    y_alignment_loss = tf.reduce_mean(tf.abs(G(F_y,external_representation=rep_F_y)-y))
+    loss = self.lambda1*x_alignment_loss + self.lambda2*y_alignment_loss
+    return loss
+
