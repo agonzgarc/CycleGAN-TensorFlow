@@ -1,5 +1,5 @@
 import tensorflow as tf
-from modelPairedRevFullRep import PairedGANDisenRevFullRep
+from modelPaired import PairedGANDisen
 from reader_paired import ReaderPaired
 from datetime import datetime
 import os
@@ -34,7 +34,7 @@ tf.flags.DEFINE_string('XY', 'data/tfrecords/domain_MNIST_MNISTC.tfrecords',
                        'XY tfrecords file for training')
 tf.flags.DEFINE_string('load_model', None,
                         'folder of saved model that you wish to continue training (e.g. 20170602-1936), default: None')
-nameNet = 'mnistc_paired_rev_on_feats'
+nameNet = 'mnistc_paired_no_rev_on_ex'
 
 def train():
   if FLAGS.load_model is not None:
@@ -63,8 +63,9 @@ def train():
         nfS=FLAGS.nfS,
         nfE=FLAGS.nfE
     )
-    G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, fake_y, fake_x = paired_gan.model()
-    optimizers = paired_gan.optimize(G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, DC_loss)
+    G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss, fake_y, fake_x = paired_gan.model()
+    optimizers = paired_gan.optimize(G_loss, D_Y_loss, F_loss, D_X_loss,
+                                     A_loss, Feat_loss, DC_loss)
 
     summary_op = tf.summary.merge_all()
     train_writer = tf.summary.FileWriter(checkpoints_dir, graph)
@@ -93,9 +94,9 @@ def train():
         fake_y_val, fake_x_val = sess.run([fake_y, fake_x])
 
         train
-        _, G_loss_val, D_Y_loss_val, F_loss_val, D_X_loss_val, A_loss_val, DC_loss_val, summary = (
+        _, G_loss_val, D_Y_loss_val, F_loss_val, D_X_loss_val, A_loss_val, Feat_loss_val, DC_loss_val, summary = (
               sess.run(
-                  [optimizers, G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, DC_loss, summary_op],
+                  [optimizers, G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss, summary_op],
                   feed_dict={paired_gan.fake_y: fake_Y_pool.query(fake_y_val),
                              paired_gan.fake_x: fake_X_pool.query(fake_x_val)}
               )

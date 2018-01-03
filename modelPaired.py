@@ -6,7 +6,7 @@ from reader_paired import ReaderPaired
 from discriminator import Discriminator
 from generatorEncoderDisen import GeneratorEncoderDisen
 from generatorDecoder import GeneratorDecoder
-from generatorDecoderReversalFullRep import GeneratorDecoderReversalFullRep
+from generatorDecoderReversal import GeneratorDecoderReversal
 from domainClassifier import DomainClassifier
 import pdb
 
@@ -65,11 +65,11 @@ class PairedGANDisen:
     self.D_X = Discriminator('D_X',
         self.is_training, norm=norm, use_sigmoid=use_sigmoid)
 
-    self.Gdex = GeneratorDecoderReversalFullRep('Gdex', self.is_training, norm=norm,
-                                 image_size=image_size)
+    #self.Gdex = GeneratorDecoderReversal('Gdex', self.is_training, norm=norm,
+                                 #image_size=image_size)
 
-    self.Fdex = GeneratorDecoderReversalFullRep('Fdex', self.is_training, norm=norm,
-                                 image_size=image_size)
+    #self.Fdex = GeneratorDecoderReversal('Fdex', self.is_training, norm=norm,
+                                 #image_size=image_size)
 
     self.DC = DomainClassifier('DC', self.is_training, norm=norm)
 
@@ -89,8 +89,6 @@ class PairedGANDisen:
     # Split returned batch into both domains
     x = xy[0]
     y = xy[1]
-
-
 
     # Generate representation with encoders
     # X -> Y
@@ -115,13 +113,13 @@ class PairedGANDisen:
     repR_Sx,_ = self.Fe(fake_y)
     X_features_loss = tf.reduce_mean(tf.abs(repR_Sx - rep_Sx))
 
+    # For evaluation only, not used on optimization
     G_recon_loss = tf.reduce_mean(tf.abs(fake_y-y))
 
     # Reverse gradient layer as maximing gan loss from exclusive part
-    rev_X_loss = self.generator_loss(self.D_Y, self.Gdex(rep_Ex), use_lsgan=self.use_lsgan)
+    #rev_X_loss = self.generator_loss(self.D_Y, self.Gdex(rep_Ex), use_lsgan=self.use_lsgan)
 
-    #G_loss =  G_gan_loss + self.lambdaRecon*G_recon_loss + self.lambdaRev*rev_X_loss
-    G_loss =  G_gan_loss + self.lambdaRev*rev_X_loss
+    G_loss =  G_gan_loss
 
     D_Y_loss = self.discriminator_loss(self.D_Y, y, self.fake_y, use_lsgan=self.use_lsgan)
 
@@ -140,12 +138,10 @@ class PairedGANDisen:
 
 
     # Reverse gradient layer as maximing gan loss from exclusive part
-    rev_Y_loss = self.generator_loss(self.D_X, self.Fdex(rep_Ey), use_lsgan=self.use_lsgan)
+    #rev_Y_loss = self.generator_loss(self.D_X, self.Fdex(rep_Ey), use_lsgan=self.use_lsgan)
 
 
-    #F_loss = F_gan_loss + self.lambdaRecon*F_recon_loss + self.lambdaRev*rev_Y_loss
-    #F_loss = F_gan_loss + self.lambdaRecon*F_recon_loss + self.lambdaRev*rev_Y_loss
-    F_loss = F_gan_loss + self.lambdaRev*rev_Y_loss
+    F_loss = F_gan_loss
 
     D_X_loss = self.discriminator_loss(self.D_X, x, self.fake_x, use_lsgan=self.use_lsgan)
 
@@ -157,7 +153,8 @@ class PairedGANDisen:
                                                                 rep_Ey],3))-y))
 
     # Add feature reconstruction loss to alignment as they work on same var set
-    A_loss = alignment_X_loss + alignment_Y_loss + X_features_loss + Y_features_loss
+    A_loss = alignment_X_loss + alignment_Y_loss 
+    Feat_loss = X_features_loss + Y_features_loss
     #A_loss = alignment_X_loss + alignment_Y_loss
 
     multiply = tf.constant([self.batch_size])
@@ -194,12 +191,12 @@ class PairedGANDisen:
     tf.summary.scalar('loss/G_total', G_loss)
     tf.summary.scalar('loss/G_gan', G_gan_loss)
     tf.summary.scalar('loss/G_recon_loss',  G_recon_loss)
-    tf.summary.scalar('loss/G_rev_X_loss', rev_X_loss)
+    #tf.summary.scalar('loss/G_rev_X_loss', rev_X_loss)
     tf.summary.scalar('loss/D_Y', D_Y_loss)
     tf.summary.scalar('loss/F_total', F_loss)
     tf.summary.scalar('loss/F_gan', F_gan_loss)
     tf.summary.scalar('loss/F_recon_loss',  F_recon_loss)
-    tf.summary.scalar('loss/F_rev_Y_loss', rev_Y_loss)
+    #tf.summary.scalar('loss/F_rev_Y_loss', rev_Y_loss)
     tf.summary.scalar('loss/D_X', D_X_loss)
     tf.summary.scalar('loss/alignment_X', alignment_X_loss)
     tf.summary.scalar('loss/alignment_Y', alignment_Y_loss)
@@ -243,23 +240,22 @@ class PairedGANDisen:
 
     tf.summary.image('X/autoencoder_rec',
                      utils.batch_convert2int(self.Fd(tf.concat([rep_Ex, rep_Sx],3))))
-    tf.summary.image('X/exclusive_rec',
-                     utils.batch_convert2int(self.Gdex(rep_Ex)))
+    #tf.summary.image('X/exclusive_rec',
+                     #utils.batch_convert2int(self.Gdex(rep_Ex)))
 
 
     tf.summary.image('Y/generated', utils.batch_convert2int(self.Fd(input_Fd)))
     tf.summary.image('Y/autoencoder_rec',
                      utils.batch_convert2int(self.Gd(tf.concat([rep_Sy,
                                                                 rep_Ey],3))),max_outputs=3)
-    tf.summary.image('Y/exclusive_rec',
-                     utils.batch_convert2int(self.Fdex(rep_Ey)))
+   # tf.summary.image('Y/exclusive_rec',
+                     #utils.batch_convert2int(self.Fdex(rep_Ey)))
 
 
 
-    return G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, DC_loss, fake_y, fake_x
-    #return G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, fake_y, fake_x
+    return G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss, fake_y, fake_x
 
-  def optimize(self, G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, DC_loss):
+  def optimize(self, G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss):
     def make_optimizer(loss, variables, name='Adam'):
       """ Adam optimizer with learning rate 0.0002 for the first 100k steps (~100 epochs)
           and a linearly decaying rate that goes to zero over the next 100k steps
@@ -288,18 +284,19 @@ class PairedGANDisen:
       )
       return learning_step
 
-    G_optimizer = make_optimizer(G_loss, [self.Ge.variables,self.Gd.variables,self.Gdex.variables], name='Adam_G')
+    G_optimizer = make_optimizer(G_loss, [self.Ge.variables,self.Gd.variables], name='Adam_G')
     D_Y_optimizer = make_optimizer(D_Y_loss, self.D_Y.variables, name='Adam_D_Y')
     F_optimizer =  make_optimizer(F_loss, [self.Fe.variables,
-                                           self.Fd.variables,self.Fdex.variables], name='Adam_F')
+                                           self.Fd.variables], name='Adam_F')
     D_X_optimizer = make_optimizer(D_X_loss, self.D_X.variables, name='Adam_D_X')
     A_optimizer = make_optimizer(A_loss,
                                  [self.Ge.variables,self.Gd.variables,self.Fe.variables,self.Fd.variables], name='Adam_A')
+    Feat_optimizer = make_optimizer(Feat_loss,
+                                 [self.Ge.variables,self.Gd.variables,self.Fe.variables,self.Fd.variables], name='Adam_Feat')
     DC_optimizer = make_optimizer(DC_loss, self.DC.variables, name='Adam_DC')
 
     with tf.control_dependencies([G_optimizer, D_Y_optimizer, F_optimizer,
-                                  #D_X_optimizer,A_optimizer]):
-                                  D_X_optimizer,A_optimizer, DC_optimizer]):
+                                  D_X_optimizer, A_optimizer, DC_optimizer]):
       return tf.no_op(name='optimizers')
 
   def domainClassifier_loss(self, DC, rep, dom):
