@@ -57,7 +57,7 @@ class ReaderPaired():
 
     with tf.name_scope(self.name[1]):
       tf.summary.image('_input', images[1])
-      tf.summary.image('_average',tf.reshape(tf.reduce_mean(images[1],axis=0),[1,self.image_size,self.image_size,3]))
+      #tf.summary.image('_average',tf.reshape(tf.reduce_mean(images[1],axis=0),[1,self.image_size,self.image_size,3]))
     return images
 
   def _preprocess(self, image):
