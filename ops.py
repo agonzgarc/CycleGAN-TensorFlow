@@ -171,6 +171,35 @@ def last_conv(input, reuse=False, use_sigmoid=False, name=None):
       output = tf.sigmoid(output)
     return output
 
+### Domain Classifier
+def fully_connected(input, reuse=False, use_sigmoid=False, name=None, units=100):
+    with tf.variable_scope(name, reuse=reuse):
+        input_flat = tf.reshape(input, [-1, input.shape[1]*input.shape[2]*input.shape[3]])
+
+        #weights = _weights("weights",
+                           #shape=[input.shape[1]*input.shape[2]*input.shape[3], units])
+        #biases = _biases("biases", [units])
+
+        # Units as argument? 
+        #fc_layer = tf.nn.relu(tf.matmul(input_flat, weights) + biases)
+        fc_layer = tf.layers.dense(input_flat, units, activation=tf.nn.relu)
+        return fc_layer
+
+def logits(input, reuse=False, use_sigmoid=False, name=None, units=2):
+    with tf.variable_scope(name, reuse=reuse):
+        #weights = _weights("weights", shape=[100, units])
+        #biases = _biases("biases", [units])
+
+        # Dropout?
+
+        # No ReLU on this layer
+        output = tf.layers.dense(input, units, activation=None)
+        #output = tf.matmul(input,weights) + biases
+        # ADDED softmax, REMOVE FROM HERE
+        #output = tf.nn.softmax(tf.matmul(input,weights) + biases)
+
+        return output
+
 ### Helpers
 def _weights(name, shape, mean=0.0, stddev=0.02):
   """ Helper to create an initialized Variable

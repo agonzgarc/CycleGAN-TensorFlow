@@ -3,7 +3,9 @@ import ops
 import utils
 from reader import Reader
 from discriminator import Discriminator
-from generator import Generator
+from generatorEncoder import GeneratorEncoder
+from generatorDecoder import GeneratorDecoder
+import pdb
 
 REAL_LABEL = 0.9
 
@@ -15,8 +17,8 @@ class CycleGAN:
                image_size=256,
                use_lsgan=True,
                norm='instance',
-               lambda1=10.0,
-               lambda2=10.0,
+               lambda1=0.1,
+               lambda2=0.1,
                learning_rate=2e-4,
                beta1=0.5,
                ngf=64
@@ -48,10 +50,13 @@ class CycleGAN:
 
     self.is_training = tf.placeholder_with_default(True, shape=[], name='is_training')
 
-    self.G = Generator('G', self.is_training, ngf=ngf, norm=norm, image_size=image_size)
+    self.Ge = GeneratorEncoder('Ge', self.is_training, ngf=ngf, norm=norm, image_size=image_size)
+    self.Gd = GeneratorDecoder('Gd', self.is_training, ngf=ngf, norm=norm, image_size=image_size)
     self.D_Y = Discriminator('D_Y',
         self.is_training, norm=norm, use_sigmoid=use_sigmoid)
-    self.F = Generator('F', self.is_training, norm=norm, image_size=image_size)
+    #self.Fe = GeneratorEncoder('Fe', self.is_training, norm=norm, image_size=image_size)
+    self.Fe = self.Ge
+    self.Fd = GeneratorDecoder('Fd', self.is_training, norm=norm, image_size=image_size)
     self.D_X = Discriminator('D_X',
         self.is_training, norm=norm, use_sigmoid=use_sigmoid)
 
@@ -69,26 +74,26 @@ class CycleGAN:
     x = X_reader.feed()
     y = Y_reader.feed()
 
-    cycle_loss = self.cycle_consistency_loss(self.G, self.F, x, y)
-    alignment_loss = self.alignment_loss(self.G, self.F, x, y)
+    cycle_loss = self.cycle_consistency_loss(self.Ge, self.Gd, self.Fe, self.Fd, x, y)
+    alignment_loss = self.alignment_loss(self.Ge, self.Gd, self.Fe, self.Fd, x, y)
 
     # X -> Y
-    fake_y = self.G(x)
+    fake_y = self.Gd(self.Ge(x))
     G_gan_loss = self.generator_loss(self.D_Y, fake_y, use_lsgan=self.use_lsgan)
     G_loss =  G_gan_loss + cycle_loss + alignment_loss
     D_Y_loss = self.discriminator_loss(self.D_Y, y, self.fake_y, use_lsgan=self.use_lsgan)
 
     # Y -> X
-    fake_x = self.F(y)
+    fake_x = self.Fd(self.Fe(y))
     F_gan_loss = self.generator_loss(self.D_X, fake_x, use_lsgan=self.use_lsgan)
     F_loss = F_gan_loss + cycle_loss + alignment_loss
     D_X_loss = self.discriminator_loss(self.D_X, x, self.fake_x, use_lsgan=self.use_lsgan)
 
     # summary
     tf.summary.histogram('D_Y/true', self.D_Y(y))
-    tf.summary.histogram('D_Y/fake', self.D_Y(self.G(x)))
+    tf.summary.histogram('D_Y/fake', self.D_Y(self.Gd(self.Ge(x))))
     tf.summary.histogram('D_X/true', self.D_X(x))
-    tf.summary.histogram('D_X/fake', self.D_X(self.F(y)))
+    tf.summary.histogram('D_X/fake', self.D_X(self.Fd(self.Fe(y))))
 
     tf.summary.scalar('loss/G', G_gan_loss)
     tf.summary.scalar('loss/D_Y', D_Y_loss)
@@ -97,14 +102,24 @@ class CycleGAN:
     tf.summary.scalar('loss/cycle', cycle_loss)
     tf.summary.scalar('loss/alignment', alignment_loss)
 
-    G_x,rep_G_x = self.G(x,output_representation=True)
-    tf.summary.image('X/generated', utils.batch_convert2int(G_x))
-    tf.summary.image('X/reconstruction', utils.batch_convert2int(self.F(G_x)))
-    tf.summary.image('X/self_reconstruction', utils.batch_convert2int(self.F(G_x,external_representation = rep_G_x)))
-    F_y,rep_F_y = self.F(y,output_representation=True)
-    tf.summary.image('Y/generated', utils.batch_convert2int(self.F(y)))
-    tf.summary.image('Y/reconstruction', utils.batch_convert2int(self.G(self.F(y))))
-    tf.summary.image('Y/self_reconstruction', utils.batch_convert2int(self.G(F_y,external_representation = rep_F_y)))
+    tf.summary.image('X/generated',
+                     utils.batch_convert2int(self.Gd(self.Ge(x))))
+    tf.summary.image('X/reconstruction',
+                     utils.batch_convert2int(self.Fd(self.Fe(self.Gd(self.Ge(x))))))
+    tf.summary.image('X/self_reconstruction',
+                     utils.batch_convert2int(self.Fd(self.Ge(x))))
+    tf.summary.image('Y/generated', utils.batch_convert2int(self.Fd(self.Fe(y))))
+    tf.summary.image('Y/reconstruction',
+                     utils.batch_convert2int(self.Gd(self.Ge(self.Fd(self.Fe(y))))))
+    tf.summary.image('Y/self_reconstruction',
+                     utils.batch_convert2int(self.Gd(self.Fe(y))),max_outputs=3)
+
+    #pdb.set_trace()
+    #tf.summary.image('X/Ge',
+                     #utils.batch_convert2fmint(self.Ge(x)),max_outputs=100)
+
+    #tf.summary.image('Y/Ge',
+                     #utils.batch_convert2fmint(self.Ge(y)),max_outputs=100)
 
     return G_loss, D_Y_loss, F_loss, D_X_loss, fake_y, fake_x
 
@@ -137,9 +152,9 @@ class CycleGAN:
       )
       return learning_step
 
-    G_optimizer = make_optimizer(G_loss, self.G.variables, name='Adam_G')
+    G_optimizer = make_optimizer(G_loss, [self.Ge.variables, self.Gd.variables], name='Adam_G')
     D_Y_optimizer = make_optimizer(D_Y_loss, self.D_Y.variables, name='Adam_D_Y')
-    F_optimizer =  make_optimizer(F_loss, self.F.variables, name='Adam_F')
+    F_optimizer =  make_optimizer(F_loss, [self.Fe.variables, self.Fd.variables], name='Adam_F')
     D_X_optimizer = make_optimizer(D_X_loss, self.D_X.variables, name='Adam_D_X')
 
     with tf.control_dependencies([G_optimizer, D_Y_optimizer, F_optimizer, D_X_optimizer]):
@@ -177,26 +192,24 @@ class CycleGAN:
       loss = -tf.reduce_mean(ops.safe_log(D(fake_y))) / 2
     return loss
 
-  def cycle_consistency_loss(self, G, F, x, y):
+  def cycle_consistency_loss(self, Ge, Gd, Fe, Fd, x, y):
     """ cycle consistency loss (L1 norm)
     """
-    forward_loss = tf.reduce_mean(tf.abs(F(G(x))-x))
-    backward_loss = tf.reduce_mean(tf.abs(G(F(y))-y))
+    forward_loss = tf.reduce_mean(tf.abs(Fd(Fe(Gd(Ge(x))))-x))
+    backward_loss = tf.reduce_mean(tf.abs(Gd(Ge((Fd(Fe(y)))))-y))
     loss = self.lambda1*forward_loss + self.lambda2*backward_loss
     return loss
 
-  def alignment_loss(self, G, F, x, y):
+  def alignment_loss(self, Ge, Gd, Fe, Fd, x, y):
     """ alignment loss (L1 norm)
     When in a separate function from the cycle_consistency_loss, slower as G_x
     and F_y need to be evaluated twice, merge!
     """
     # Combine the encoder of G and decoder of F
-    G_x,rep_G_x = G(x,output_representation=True)
-    x_alignment_loss = tf.reduce_mean(tf.abs(F(G_x,external_representation = rep_G_x)-x))
+    x_alignment_loss = tf.reduce_mean(tf.abs(Fd(Ge(x))-x))
 
     # Combine the encoder of F and decoder of F
-    F_y,rep_F_y = F(y,output_representation=True)
-    y_alignment_loss = tf.reduce_mean(tf.abs(G(F_y,external_representation=rep_F_y)-y))
+    y_alignment_loss = tf.reduce_mean(tf.abs(Gd(Fe(y))-y))
     loss = self.lambda1*x_alignment_loss + self.lambda2*y_alignment_loss
     return loss
 

@@ -8,15 +8,15 @@ python export_graph.py --model pretrained/apple2orange.pb \
 
 import tensorflow as tf
 import os
-from model import CycleGAN
+from modelPaired import PairedGANDisen
 import utils
 
 FLAGS = tf.flags.FLAGS
 
-tf.flags.DEFINE_string('model', '', 'model path (.pb)')
-tf.flags.DEFINE_string('input', 'input_sample.jpg', 'input image path (.jpg)')
-tf.flags.DEFINE_string('output', 'output_sample.jpg', 'output image path (.jpg)')
-tf.flags.DEFINE_integer('image_size', '256', 'image size, default: 256')
+tf.flags.DEFINE_string('model', 'pretrained/0noiseaut.pb', 'model path (.pb)')
+tf.flags.DEFINE_string('input', 'inputs/input_sample.png', 'input image path (.jpg)')
+tf.flags.DEFINE_string('output', 'outputs/output_sample.jpg', 'output image path (.jpg)')
+tf.flags.DEFINE_integer('image_size', '32', 'image size, default: 256')
 
 def inference():
   graph = tf.Graph()
@@ -35,10 +35,11 @@ def inference():
     [output_image] = tf.import_graph_def(graph_def,
                           input_map={'input_image': input_image},
                           return_elements=['output_image:0'],
-                          name='output')
+                          name='output_inf')
 
   with tf.Session(graph=graph) as sess:
     generated = output_image.eval()
+    print(output_image.shape)
     with open(FLAGS.output, 'wb') as f:
       f.write(generated)
 

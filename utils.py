@@ -1,10 +1,18 @@
 import tensorflow as tf
 import random
+import pdb
 
 def convert2int(image):
   """ Transfrom from float tensor ([-1.,1.]) to int image ([0,255])
   """
   return tf.image.convert_image_dtype((image+1.0)/2.0, tf.uint8)
+
+def convert2fmint(image):
+  """ Transfrom from float tensor ([-1.,1.]) to int image ([0,255])
+  """
+  #pdb.set_trace()
+  return [tf.image.convert_image_dtype((image[:,:,i]+1.0)/2.0, tf.uint8) for i
+          in range(10)]
 
 def convert2float(image):
   """ Transfrom from int image ([0,255]) to float tensor ([-1.,1.])
@@ -20,6 +28,34 @@ def batch_convert2int(images):
     4D int tensor
   """
   return tf.map_fn(convert2int, images, dtype=tf.uint8)
+
+#def batch_convert2fmint(images):
+  #"""
+  #Args:
+    #images: 4D float tensor (batch_size, image_size, image_size, depth)
+  #Returns:
+    #4D int tensor
+  #"""
+  ##pdb.set_trace()
+  #return tf.reshape(tf.map_fn(convert2int, tf.transpose(images[1,:,:,:],[2, 0,
+                                                                         #1]),
+                              #dtype=tf.uint8),[256,8,8,1])
+  ##return convert2fmint(images[1,:,:,:])
+
+def batch_convert2fmint(images,num_fm=256):
+  """
+  Args:
+    images: 4D float tensor (batch_size, image_size, image_size, depth)
+  Returns:
+    4D int tensor
+  """
+  #pdb.set_trace()
+  return tf.reshape(tf.map_fn(convert2int, tf.transpose(images[1,:,:,:],[2, 0,
+                                                                         1]),
+                              dtype=tf.uint8),[num_fm,8,8,1])
+  #return convert2fmint(images[1,:,:,:])
+
+
 
 def batch_convert2float(images):
   """

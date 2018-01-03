@@ -55,7 +55,7 @@ class Generator:
           activation='tanh', reuse=self.reuse, name='output')           # (?, w, h, 3)
 
     # set reuse=True for next call
-    self.reuse = True
+    #self.reuse = True
     self.variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=self.name)
 
     return (output, res_output) if output_representation else output

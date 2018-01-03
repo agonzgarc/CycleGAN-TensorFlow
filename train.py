@@ -32,14 +32,14 @@ tf.flags.DEFINE_string('Y', 'data/tfrecords/domain_1.tfrecords',
                        'Y tfrecords file for training')
 tf.flags.DEFINE_string('load_model', None,
                         'folder of saved model that you wish to continue training (e.g. 20170602-1936), default: None')
-
+nameNet = 'mnistm_shared'
 
 def train():
   if FLAGS.load_model is not None:
     checkpoints_dir = "checkpoints/" + FLAGS.load_model.lstrip("checkpoints/")
   else:
-    current_time = datetime.now().strftime("%Y%m%d-%H%M")
-    checkpoints_dir = "checkpoints/{}".format(current_time)
+    #current_time = datetime.now().strftime("%Y%m%d-%H%M")
+    checkpoints_dir = "checkpoints/{}".format(nameNet)
     try:
       os.makedirs(checkpoints_dir)
     except os.error:
