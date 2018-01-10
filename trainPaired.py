@@ -1,5 +1,5 @@
 import tensorflow as tf
-from modelPaired import PairedGANDisen
+from modelPairedTransFeatures import PairedGANDisen
 from reader_paired import ReaderPaired
 from datetime import datetime
 import os
@@ -34,7 +34,7 @@ tf.flags.DEFINE_string('XY', 'data/tfrecords/domain_MNIST_MNISTC.tfrecords',
                        'XY tfrecords file for training')
 tf.flags.DEFINE_string('load_model', None,
                         'folder of saved model that you wish to continue training (e.g. 20170602-1936), default: None')
-nameNet = 'mnistc_paired_no_rev_on_ex'
+nameNet = 'mnistc_paired_trans'
 
 def train():
   if FLAGS.load_model is not None:

@@ -21,8 +21,8 @@ class GeneratorTransformer:
     with tf.variable_scope(self.name):
         g = tf.get_default_graph()
         with g.gradient_override_map({"Identity": "ReverseGrad"}):
-          #idinput = tf.identity(input)
-          idinput = input
+          idinput = tf.identity(input)
+          #idinput = tf.stop_gradient(input)
           res_input = ops.n_res_blocks(idinput, reuse=self.reuse, n=3)
 
           # conv layer  - output depth is 32 (as in shared representation)

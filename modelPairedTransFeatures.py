@@ -164,7 +164,7 @@ class PairedGANDisen:
                                                                 rep_Ey],3))-y))
 
     # Add feature reconstruction loss to alignment as they work on same var set
-    A_loss = alignment_X_loss + alignment_Y_loss
+    A_loss = 0.1*alignment_X_loss + 0.1*alignment_Y_loss
     Feat_loss = X_features_loss + Y_features_loss
 
     multiply = tf.constant([self.batch_size])
@@ -228,8 +228,7 @@ class PairedGANDisen:
     tf.summary.image('X/generated2',
                      utils.batch_convert2int(self.Gd(tf.concat([rep_Sx, noise2],3))))
 
-    # swap representation
-    #pdb.set_trace()
+    # swap representation, Y images
     ex1 = tf.reshape(rep_Ey[0,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
     s1 = tf.reshape(rep_Sy[0,:],[1,rep_Sy.shape[1],rep_Sy.shape[2],rep_Sy.shape[3]])
     ex2 = tf.reshape(rep_Ey[1,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
@@ -249,7 +248,7 @@ class PairedGANDisen:
     tf.summary.image('X/im2bk3',
                      utils.batch_convert2int(self.Gd(tf.concat([s2, ex3],3))))
 
-
+   
     tf.summary.image('X/autoencoder_rec',
                      utils.batch_convert2int(self.Fd(tf.concat([rep_Ex, rep_Sx],3))))
     #tf.summary.image('X/exclusive_rec',
@@ -260,8 +259,33 @@ class PairedGANDisen:
     tf.summary.image('Y/autoencoder_rec',
                      utils.batch_convert2int(self.Gd(tf.concat([rep_Sy,
                                                                 rep_Ey],3))),max_outputs=3)
+    # swap representation, X images
+    ex1X = tf.reshape(rep_Ex[0,:],[1,rep_Ex.shape[1],rep_Ex.shape[2],rep_Ex.shape[3]])
+    s1X = tf.reshape(rep_Sx[0,:],[1,rep_Sx.shape[1],rep_Sx.shape[2],rep_Sx.shape[3]])
+    ex2X = tf.reshape(rep_Ex[1,:],[1,rep_Ex.shape[1],rep_Ex.shape[2],rep_Ex.shape[3]])
+    s2X = tf.reshape(rep_Sx[1,:],[1,rep_Sx.shape[1],rep_Sx.shape[2],rep_Sx.shape[3]])
+
+    tf.summary.image('Y/im1bk2',
+                     utils.batch_convert2int(self.Fd(tf.concat([ex2X,s1X],3))))
+
+    tf.summary.image('Y/im2bk1',
+                     utils.batch_convert2int(self.Fd(tf.concat([ex1X,s2X],3))))
+
+    tf.summary.image('Y/im2bkg0',
+                     utils.batch_convert2int(self.Fd(tf.concat([tf.zeros(ex1X.shape),s2X],3))))
+
+
+
    # tf.summary.image('Y/exclusive_rec',
                      #utils.batch_convert2int(self.Fdex(rep_Ey)))
+
+    # Noise visualization
+    #tf.summary.image('ZExclRep/Xgenerated', utils.batch_convert2fmint(rep_Ex,16),max_outputs=16)
+    #tf.summary.image('ZExclRep/Xnoise', utils.batch_convert2fmint(noise2,16),max_outputs=16)
+    #tf.summary.image('ZExclRep/Ygenerated', utils.batch_convert2fmint(rep_Ey,16),max_outputs=16)
+    #tf.summary.image('ZExclRep/Ynoise', utils.batch_convert2fmint(noise,16),max_outputs=16)
+    #tf.summary.image('ZSharedRep/X', utils.batch_convert2fmint(rep_Sx,32),max_outputs=4)
+    #tf.summary.image('ZSharedRep/Y', utils.batch_convert2fmint(rep_Sy,32),max_outputs=4)
 
 
 
