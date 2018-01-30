@@ -2,10 +2,6 @@ import tensorflow as tf
 import ops
 import utils
 
-@tf.RegisterGradient("ReverseGrad")
-def _reverse_grad(unused_op, grad):
-    return -1.0*grad
-
 class GeneratorDecoderReversal:
   def __init__(self, name, is_training, ngf=16, norm='instance', image_size=128):
     self.name = name
@@ -62,3 +58,14 @@ class GeneratorDecoderReversal:
     image = utils.batch_convert2int(self.__call__(input))
     image = tf.image.encode_jpeg(tf.squeeze(image, [0]))
     return image
+
+
+
+
+
+
+
+
+
+
+

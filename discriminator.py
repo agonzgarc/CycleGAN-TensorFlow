@@ -9,7 +9,7 @@ class Discriminator:
     self.reuse = False
     self.use_sigmoid = use_sigmoid
 
-  def __call__(self, input):
+  def __call__(self, inputS, inputT):
     """
     Args:
       input: batch_size x image_size x image_size x 3
@@ -18,6 +18,9 @@ class Discriminator:
               filled with 0.9 if real, 0.0 if fake
     """
     with tf.variable_scope(self.name):
+      # create input by concatenating both images
+      input = tf.concat([inputS,inputT],3)
+
       # convolution layers
       C64 = ops.Ck(input, 64, reuse=self.reuse, norm=None,
           is_training=self.is_training, name='C64')             # (?, w/2, h/2, 64)

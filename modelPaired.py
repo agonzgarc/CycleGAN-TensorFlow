@@ -6,8 +6,8 @@ from reader_paired import ReaderPaired
 from discriminator import Discriminator
 from generatorEncoderDisen import GeneratorEncoderDisen
 from generatorDecoder import GeneratorDecoder
-from generatorDecoderReversal import GeneratorDecoderReversal
 from domainClassifier import DomainClassifier
+from generatorExclusive import GeneratorExclusive
 import pdb
 
 REAL_LABEL = 0.9
@@ -15,34 +15,28 @@ REAL_LABEL = 0.9
 class PairedGANDisen:
   def __init__(self,
                XY_train_file='',
-               batch_size=1,
+               batch_size=32,
                image_size=32,
                use_lsgan=True,
                norm='instance',
-               lambdaRecon=1.0,
-               lambdaAlign=1.0,
-               lambdaRev=1.0,
                learning_rate=2e-4,
                beta1=0.5,
-               nfS=64,
-               nfE=36
+               nfs=16,
+               nfe=8
               ):
     """
     Args:
       XY_train_file: string, X and Y tfrecords file for training
       batch_size: integer, batch size
       image_size: integer, image size
-      lambda1: integer, weight for forward cycle loss (X->Y->X)
-      lambda2: integer, weight for backward cycle loss (Y->X->Y)
       use_lsgan: boolean
       norm: 'instance' or 'batch'
       learning_rate: float, initial learning rate for Adam
       beta1: float, momentum term of Adam
-      ngf: number of gen filters in first conv layer
+      nfS: size of the shared part of the representation
+      nfE: size of the exclusive part of the representation
     """
-    self.lambdaRecon = lambdaRecon
-    self.lambdaAlign = lambdaAlign
-    self.lambdaRev = lambdaRev
+
     self.use_lsgan = use_lsgan
     use_sigmoid = not use_lsgan
     self.batch_size = batch_size
@@ -50,34 +44,58 @@ class PairedGANDisen:
     self.learning_rate = learning_rate
     self.beta1 = beta1
     self.XY_train_file = XY_train_file
+    self.nfs = nfs
+    self.nfe = nfe
 
     self.meanNoise = 0.0
     self.stddevNoise = 2.5
 
+    self.weightGAN = 0.1
+
     self.is_training = tf.placeholder_with_default(True, shape=[], name='is_training')
 
-    self.Ge = GeneratorEncoderDisen('Ge', self.is_training, norm=norm, image_size=image_size)
-    self.Gd = GeneratorDecoder('Gd', self.is_training, norm=norm, image_size=image_size)
+    self.Ge = GeneratorEncoderDisen('Ge', self.is_training, norm=norm,
+                                    image_size=image_size, nfs=self.nfs, nfe=self.nfe)
+    self.Gd = GeneratorDecoder('Gd', self.is_training, norm=norm, image_size=image_size, nfs=self.nfs, nfe=self.nfe)
     self.D_Y = Discriminator('D_Y',
         self.is_training, norm=norm, use_sigmoid=use_sigmoid)
-    self.Fe = GeneratorEncoderDisen('Fe', self.is_training,norm=norm, image_size=image_size)
-    self.Fd = GeneratorDecoder('Fd', self.is_training, norm=norm, image_size=image_size)
+    self.Dex_Y = Discriminator('Dex_Y',
+        self.is_training, norm=norm, use_sigmoid=use_sigmoid)
+    self.Fe = GeneratorEncoderDisen('Fe', self.is_training,norm=norm, image_size=image_size, nfs=self.nfs, nfe=self.nfe)
+    self.Fd = GeneratorDecoder('Fd', self.is_training, norm=norm, image_size=image_size, nfs=self.nfs, nfe=self.nfe)
     self.D_X = Discriminator('D_X',
         self.is_training, norm=norm, use_sigmoid=use_sigmoid)
+    self.Dex_X = Discriminator('Dex_X',
+        self.is_training, norm=norm, use_sigmoid=use_sigmoid)
 
-    #self.Gdex = GeneratorDecoderReversal('Gdex', self.is_training, norm=norm,
-                                 #image_size=image_size)
+    self.Gdex = GeneratorDecoder('Gdex', self.is_training, norm=norm,
+                                 image_size=image_size, nfs=self.nfs,
+                                 nfe=self.nfe, reverse=True)
 
-    #self.Fdex = GeneratorDecoderReversal('Fdex', self.is_training, norm=norm,
-                                 #image_size=image_size)
+    self.Fdex = GeneratorDecoder('Fdex', self.is_training, norm=norm,
+                                 image_size=image_size, nfs=self.nfs,
+                                 nfe=self.nfe, reverse=True)
+
+    #self.Geex = GeneratorEncoderDisen('Geex',self.is_training, norm=norm,
+                                      #image_size=image_size, nfs=0, nfe=self.nfe)
+    #self.Feex = GeneratorEncoderDisen('Feex',self.is_training, norm=norm,
+                                      #image_size=image_size, nfs=0, nfe=self.nfe)
 
     self.DC = DomainClassifier('DC', self.is_training, norm=norm)
+
+    self.Ex_Y = GeneratorExclusive('ZEx_Y', self.is_training, norm=norm, nfe=self.nfe)
+    self.Ex_X = GeneratorExclusive('ZEx_X', self.is_training, norm=norm, nfe=self.nfe)
 
 
 
     self.fake_x = tf.placeholder(tf.float32,
         shape=[batch_size, image_size, image_size, 3])
     self.fake_y = tf.placeholder(tf.float32,
+        shape=[batch_size, image_size, image_size, 3])
+
+    self.fake_ex_x = tf.placeholder(tf.float32,
+        shape=[batch_size, image_size, image_size, 3])
+    self.fake_ex_y = tf.placeholder(tf.float32,
         shape=[batch_size, image_size, image_size, 3])
 
   def model(self):
@@ -90,6 +108,8 @@ class PairedGANDisen:
     x = xy[0]
     y = xy[1]
 
+
+
     # Generate representation with encoders
     # X -> Y
     rep_Sx, rep_Ex = self.Ge(x)
@@ -100,50 +120,73 @@ class PairedGANDisen:
     mean_X, var_X = tf.nn.moments(rep_Ex, axes=[0,1,2])
     mean_Y, var_Y = tf.nn.moments(rep_Ey, axes=[0,1,2])
 
-    noise = tf.random_normal(rep_Ey.shape, mean=mean_Y,
+    #### G block, X --> Y
+    noise_X = tf.random_normal(rep_Ey.shape, mean=mean_Y,
                                     stddev=tf.sqrt(var_Y))
 
     # Here, the exlusive bit comes before the shared part
-    input_Gd = tf.concat([rep_Sx, noise],3)
+    input_Gd = tf.concat([rep_Sx, noise_X],3)
 
     fake_y = self.Gd(input_Gd)
-    G_gan_loss = self.generator_loss(self.D_Y, fake_y, use_lsgan=self.use_lsgan)
+    G_gan_loss = self.generator_loss(self.D_Y, x, fake_y, use_lsgan=self.use_lsgan)
+
 
     # Add reconstruction loss on shared features
-    repR_Sx,_ = self.Fe(fake_y)
-    X_features_loss = tf.reduce_mean(tf.abs(repR_Sx - rep_Sx))
+    #repR_Sx, repR_Ex = self.Fe(fake_y)
+    #X_features_loss = tf.reduce_mean(tf.abs(repR_Sx - rep_Sx))
 
-    # For evaluation only, not used on optimization
-    G_recon_loss = tf.reduce_mean(tf.abs(fake_y-y))
+    #X_noise_loss = tf.reduce_mean(tf.abs(repR_Ex - noise))
+
+    #X_features_noise_loss = X_features_loss + X_noise_loss
+
+    #G_recon_loss = tf.reduce_mean(tf.abs(fake_y-y))
 
     # Reverse gradient layer as maximing gan loss from exclusive part
-    #rev_X_loss = self.generator_loss(self.D_Y, self.Gdex(rep_Ex), use_lsgan=self.use_lsgan)
+    fake_ex_y = self.Gdex(rep_Ex)
 
-    G_loss =  G_gan_loss
+    #fake_ex_y = self.Gdex(rep_Sx,rep_Ex)
+    Gdex_loss = self.generator_loss(self.Dex_Y, x, fake_ex_y, use_lsgan=self.use_lsgan)
 
-    D_Y_loss = self.discriminator_loss(self.D_Y, y, self.fake_y, use_lsgan=self.use_lsgan)
+    # Try to get the exclusive rep input with the image
+    #_, repExc_Ex = self.Geex(fake_ex_y)
+    #Geex_loss = tf.reduce_mean(tf.abs(repExc_Ex - rep_Ex))
 
-    noise = tf.random_normal(rep_Ex.shape, mean=mean_X,
+    G_loss =  G_gan_loss + Gdex_loss# + Geex_loss
+    G_loss = self.weightGAN*G_loss
+
+    D_Y_loss = self.discriminator_loss(self.D_Y, x, y, self.fake_y, use_lsgan=self.use_lsgan)
+    Dex_Y_loss = self.discriminator_loss(self.Dex_Y, x, y, self.fake_ex_y, use_lsgan=self.use_lsgan)
+
+
+
+    #### F block, Y-->X
+    noise_Y = tf.random_normal(rep_Ex.shape, mean=mean_X,
                                     stddev=tf.sqrt(var_X))
 
-    input_Fd = tf.concat([noise, rep_Sy],3)
+    input_Fd = tf.concat([noise_Y, rep_Sy],3)
 
     fake_x = self.Fd(input_Fd)
-    F_gan_loss = self.generator_loss(self.D_X, fake_x, use_lsgan=self.use_lsgan)
+    F_gan_loss = self.generator_loss(self.D_X, y, fake_x, use_lsgan=self.use_lsgan)
 
-    repR_Sy,_ = self.Ge(fake_x)
-    Y_features_loss = tf.reduce_mean(tf.abs(repR_Sy - rep_Sy))
+    #repR_Sy,_ = self.Ge(fake_x)
+    #Y_features_loss = tf.reduce_mean(tf.abs(repR_Sy - rep_Sy))
 
-    F_recon_loss = tf.reduce_mean(tf.abs(fake_x-x))
+    #F_recon_loss = tf.reduce_mean(tf.abs(fake_x-x))
+
 
 
     # Reverse gradient layer as maximing gan loss from exclusive part
-    #rev_Y_loss = self.generator_loss(self.D_X, self.Fdex(rep_Ey), use_lsgan=self.use_lsgan)
+    fake_ex_x = self.Fdex(rep_Ey)
+    Fdex_loss = self.generator_loss(self.Dex_X, y, fake_ex_x, use_lsgan=self.use_lsgan)
+
+    #_, repExc_Ey = self.Feex(fake_ex_y)
+    #Feex_loss = tf.reduce_mean(tf.abs(repExc_Ey - rep_Ey))
 
 
-    F_loss = F_gan_loss
-
-    D_X_loss = self.discriminator_loss(self.D_X, x, self.fake_x, use_lsgan=self.use_lsgan)
+    F_loss = F_gan_loss + Fdex_loss# + Feex_loss
+    F_loss = self.weightGAN*F_loss
+    D_X_loss = self.discriminator_loss(self.D_X, y, x, self.fake_x, use_lsgan=self.use_lsgan)
+    Dex_X_loss = self.discriminator_loss(self.Dex_X, y, x, self.fake_ex_x, use_lsgan=self.use_lsgan)
 
 
     # Alignment loss for autoencoders
@@ -153,9 +196,13 @@ class PairedGANDisen:
                                                                 rep_Ey],3))-y))
 
     # Add feature reconstruction loss to alignment as they work on same var set
-    A_loss = alignment_X_loss + alignment_Y_loss 
-    Feat_loss = X_features_loss + Y_features_loss
-    #A_loss = alignment_X_loss + alignment_Y_loss
+    A_loss = alignment_X_loss + 10*alignment_Y_loss
+
+    #Feat_loss = X_features_loss + Y_features_loss
+
+    # Feature reconstruction loss for the paired case
+    Feat_loss = tf.reduce_mean(tf.abs(rep_Sx-rep_Sy))
+
 
     multiply = tf.constant([self.batch_size])
     dom_labels_x=tf.reshape(tf.tile(tf.constant([1.0,0.0]),multiply),[multiply[0],2])
@@ -168,18 +215,24 @@ class PairedGANDisen:
     DC_loss = dc_loss_x + dc_loss_y
 
     # summary
-    tf.summary.histogram('D_Y/true', self.D_Y(y))
-    tf.summary.histogram('D_Y/fake', self.D_Y(self.Gd(input_Gd)))
-    tf.summary.histogram('D_X/true', self.D_X(x))
-    tf.summary.histogram('D_X/fake', self.D_X(self.Fd(input_Fd)))
+    tf.summary.histogram('D_Y/true', self.D_Y(x,y))
+    tf.summary.histogram('D_Y/fake', self.D_Y(x,self.Gd(input_Gd)))
+    tf.summary.histogram('D_X/true', self.D_X(y,x))
+    tf.summary.histogram('D_X/fake', self.D_X(y,self.Fd(input_Fd)))
+    tf.summary.histogram('Dex_Y/true', self.Dex_Y(x,y))
+    tf.summary.histogram('Dex_Y/fake', self.Dex_Y(x,self.Gdex(rep_Ex)))
+    tf.summary.histogram('Dex_X/true', self.Dex_X(y,x))
+    tf.summary.histogram('Dex_X/fake', self.Dex_X(y,self.Fdex(rep_Ey)))
+
+
 
     tf.summary.histogram('RepX/exc', rep_Ex)
     tf.summary.histogram('RepX/gen', rep_Sx)
-    tf.summary.histogram('RepX/noise', noise)
+    tf.summary.histogram('RepX/noise', noise_X)
 
-    tf.summary.histogram('RepY/exc', rep_Ex)
-    tf.summary.histogram('RepY/gen', rep_Sx)
-    tf.summary.histogram('RepY/noise', noise)
+    tf.summary.histogram('RepY/exc', rep_Ey)
+    tf.summary.histogram('RepY/gen', rep_Sy)
+    tf.summary.histogram('RepY/noise', noise_Y)
 
     tf.summary.histogram('DC/X/scoreX', DC_pred_X[:,0])
     tf.summary.histogram('DC/X/scoreY', DC_pred_X[:,1])
@@ -190,72 +243,135 @@ class PairedGANDisen:
 
     tf.summary.scalar('loss/G_total', G_loss)
     tf.summary.scalar('loss/G_gan', G_gan_loss)
-    tf.summary.scalar('loss/G_recon_loss',  G_recon_loss)
-    #tf.summary.scalar('loss/G_rev_X_loss', rev_X_loss)
+    tf.summary.scalar('loss/Gdex_gan', Gdex_loss)
+    #tf.summary.scalar('loss/Geex_gan', Geex_loss)
     tf.summary.scalar('loss/D_Y', D_Y_loss)
+    tf.summary.scalar('loss/Dex_Y', Dex_Y_loss)
     tf.summary.scalar('loss/F_total', F_loss)
     tf.summary.scalar('loss/F_gan', F_gan_loss)
-    tf.summary.scalar('loss/F_recon_loss',  F_recon_loss)
-    #tf.summary.scalar('loss/F_rev_Y_loss', rev_Y_loss)
+    tf.summary.scalar('loss/Fdex_gan', Fdex_loss)
+    #tf.summary.scalar('loss/Feex_gan', Feex_loss)
     tf.summary.scalar('loss/D_X', D_X_loss)
+    tf.summary.scalar('loss/Dex_X', Dex_X_loss)
     tf.summary.scalar('loss/alignment_X', alignment_X_loss)
     tf.summary.scalar('loss/alignment_Y', alignment_Y_loss)
     tf.summary.scalar('loss/DC_loss_x', dc_loss_x)
     tf.summary.scalar('loss/DC_loss_y', dc_loss_y)
-    tf.summary.scalar('loss/X_features_loss', X_features_loss)
-    tf.summary.scalar('loss/Y_features_loss', Y_features_loss)
+    #tf.summary.scalar('loss/X_features_loss', X_features_loss)
+    #tf.summary.scalar('loss/Y_features_loss', Y_features_loss)
+    tf.summary.scalar('loss/Feat_loss', Feat_loss)
 
 
-
+    generatedX1 = self.Gd(input_Gd)
     tf.summary.image('X/generated',
-                     utils.batch_convert2int(self.Gd(input_Gd)))
+                     utils.batch_convert2int(generatedX1 ))
 
     noise2 = tf.random_normal(rep_Ey.shape, mean=mean_Y,
                                     stddev=tf.sqrt(var_Y))
 
+    generatedX2 = self.Gd(tf.concat([rep_Sx, noise2],3))
     tf.summary.image('X/generated2',
-                     utils.batch_convert2int(self.Gd(tf.concat([rep_Sx, noise2],3))))
+                     utils.batch_convert2int(generatedX2))
+
+    noiseXVar = tf.reduce_mean(tf.abs(generatedX1[:,:4,:4,:] - generatedX2[:,:4,:4,:]))
+    tf.summary.scalar('Eval/XnoiseVar',noiseXVar)
+
+
+
+    # Autoencoders
+    autoX = self.Fd(tf.concat([rep_Ex, rep_Sx],3))
+    tf.summary.image('X/autoencoder_rec',
+                     utils.batch_convert2int(autoX))
+    tf.summary.image('X/exclusive_rec',
+                     utils.batch_convert2int(self.Gdex(rep_Ex)))
+
+    autoY = self.Gd(tf.concat([rep_Sy,rep_Ey],3))
+    tf.summary.image('Y/autoencoder_rec',
+                     utils.batch_convert2int(autoY),max_outputs=3)
+    tf.summary.image('Y/exclusive_rec',
+                     utils.batch_convert2int(self.Fdex(rep_Ey)))
+
+    swapScoreBKG = self.computeSwapScoreBKG(rep_Sy, rep_Ey, autoY)
 
     # swap representation
-    #pdb.set_trace()
-    ex1 = tf.reshape(rep_Ey[0,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
-    s1 = tf.reshape(rep_Sy[0,:],[1,rep_Sy.shape[1],rep_Sy.shape[2],rep_Sy.shape[3]])
-    ex2 = tf.reshape(rep_Ey[1,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
-    s2 = tf.reshape(rep_Sy[1,:],[1,rep_Sy.shape[1],rep_Sy.shape[2],rep_Sy.shape[3]])
+    #ex1 = tf.reshape(rep_Ey[0,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
+    #s1 = tf.reshape(rep_Sy[0,:],[1,rep_Sy.shape[1],rep_Sy.shape[2],rep_Sy.shape[3]])
+    #ex2 = tf.reshape(rep_Ey[1,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
+    #s2 = tf.reshape(rep_Sy[1,:],[1,rep_Sy.shape[1],rep_Sy.shape[2],rep_Sy.shape[3]])
+    #ex3 = tf.reshape(rep_Ey[2,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
 
-    ex3 = tf.reshape(rep_Ey[2,:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
+    #im1bk2 = self.Gd(tf.concat([s1, ex2],3))
+    #tf.summary.image('X/im1bk2',utils.batch_convert2int(im1bk2))
 
-    tf.summary.image('X/im1bk2',
-                     utils.batch_convert2int(self.Gd(tf.concat([s1, ex2],3))))
+    #im2bk1 = self.Gd(tf.concat([s2, ex1],3))
+    #tf.summary.image('X/im2bk1', utils.batch_convert2int(im2bk1))
 
-    tf.summary.image('X/im2bk1',
-                     utils.batch_convert2int(self.Gd(tf.concat([s2, ex1],3))))
+    #im2bk3 = self.Gd(tf.concat([s2, ex3],3))
+    #tf.summary.image('X/im2bk3', utils.batch_convert2int(im2bk3))
 
-    #tf.summary.image('X/sanitycheckim1bk1',
-     #                utils.batch_convert2int(self.Gd(tf.concat([s1, ex1],3))))
-
-    tf.summary.image('X/im2bk3',
-                     utils.batch_convert2int(self.Gd(tf.concat([s2, ex3],3))))
-
-
-    tf.summary.image('X/autoencoder_rec',
-                     utils.batch_convert2int(self.Fd(tf.concat([rep_Ex, rep_Sx],3))))
-    #tf.summary.image('X/exclusive_rec',
-                     #utils.batch_convert2int(self.Gdex(rep_Ex)))
+    ##Evaluation test on swapped background
+    #swapScoreBKG = tf.reduce_mean(tf.abs(im1bk2[0,:4,:4,:] - autoY[1,:4,:4,:])) + tf.reduce_mean(tf.abs(im2bk1[0,:4,:4,:] - autoY[0,:4,:4,:]))
+    tf.summary.scalar('Eval/swapScoreBKG', swapScoreBKG)
 
 
     tf.summary.image('Y/generated', utils.batch_convert2int(self.Fd(input_Fd)))
-    tf.summary.image('Y/autoencoder_rec',
-                     utils.batch_convert2int(self.Gd(tf.concat([rep_Sy,
-                                                                rep_Ey],3))),max_outputs=3)
-   # tf.summary.image('Y/exclusive_rec',
-                     #utils.batch_convert2int(self.Fdex(rep_Ey)))
+
+    # swap representation, X images
+    ex1X = tf.reshape(rep_Ex[0,:],[1,rep_Ex.shape[1],rep_Ex.shape[2],rep_Ex.shape[3]])
+    s1X = tf.reshape(rep_Sx[0,:],[1,rep_Sx.shape[1],rep_Sx.shape[2],rep_Sx.shape[3]])
+    ex2X = tf.reshape(rep_Ex[1,:],[1,rep_Ex.shape[1],rep_Ex.shape[2],rep_Ex.shape[3]])
+    s2X = tf.reshape(rep_Sx[1,:],[1,rep_Sx.shape[1],rep_Sx.shape[2],rep_Sx.shape[3]])
+
+    im1bk2 =self.Fd(tf.concat([ex2X,s1X],3))
+    tf.summary.image('Y/im1bk2', utils.batch_convert2int(im1bk2))
+
+    im2bk1 = self.Fd(tf.concat([ex1X,s2X],3))
+    tf.summary.image('Y/im2bk1', utils.batch_convert2int(im2bk1))
+
+    im2bk0 = self.Fd(tf.concat([tf.zeros(ex1X.shape),s2X],3))
+    tf.summary.image('Y/im2bkg0', utils.batch_convert2int(im2bk0))
+
+    #pdb.set_trace()
+    #autoX1 = tf.reshape(autoX[0,:,:,:],[1,32,32,3])
+    #autoX2 = tf.reshape(autoX[1,:,:,:],[1,32,32,3])
+
+    # Evaluation test on swapped background
+    swapScoreFG = tf.reduce_mean(tf.abs(im1bk2[0,:,:,:] - autoX[0,:,:,:])) + tf.reduce_mean(tf.abs(im2bk1[0,:,:,:] - autoX[1,:,:,:]))
+
+    tf.summary.scalar('Eval/swapScoreFG', swapScoreFG)
 
 
+    # Show representation
+    tf.summary.image('ZExclRep/Xgenerated',
+                     utils.batch_convert2fmint(rep_Ex,self.nfe),max_outputs=16)
+    tf.summary.image('ZExclRep/Xnoise', utils.batch_convert2fmint(noise_X,self.nfe),max_outputs=16)
+    tf.summary.image('ZExclRep/Ygenerated',
+                     utils.batch_convert2fmint(rep_Ey,self.nfe),max_outputs=16)
+    tf.summary.image('ZExclRep/Ynoise', utils.batch_convert2fmint(noise_Y,self.nfe),max_outputs=16)
+    tf.summary.image('ZSharedRep/X', utils.batch_convert2fmint(rep_Sx,self.nfs),max_outputs=4)
+    tf.summary.image('ZSharedRep/Y', utils.batch_convert2fmint(rep_Sy,self.nfs),max_outputs=4)
 
-    return G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss, fake_y, fake_x
 
-  def optimize(self, G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss):
+    # build dictionary to return
+    loss_dict = {'G_loss':G_loss,
+                 'D_Y_loss':D_Y_loss,
+                 'Dex_Y_loss':Dex_Y_loss,
+                 'F_loss':F_loss,
+                 'D_X_loss':D_X_loss,
+                 'Dex_X_loss':Dex_X_loss,
+                 'A_loss':A_loss,
+                 'Feat_loss':Feat_loss,
+                 'DC_loss':DC_loss,
+                 'fake_y':fake_y,
+                 'fake_x':fake_x,
+                 'fake_ex_y':fake_ex_y,
+                 'fake_ex_x':fake_ex_x,
+                 'swapScoreFG':swapScoreFG,
+                 'swapScoreBKG':swapScoreBKG
+                }
+    return loss_dict
+
+  def optimize(self, loss_dict):
     def make_optimizer(loss, variables, name='Adam'):
       """ Adam optimizer with learning rate 0.0002 for the first 100k steps (~100 epochs)
           and a linearly decaying rate that goes to zero over the next 100k steps
@@ -263,8 +379,8 @@ class PairedGANDisen:
       global_step = tf.Variable(0, trainable=False)
       starter_learning_rate = self.learning_rate
       end_learning_rate = 0.0
-      start_decay_step = 100000
-      decay_steps = 100000
+      start_decay_step = 10000
+      decay_steps = 10000
       beta1 = self.beta1
       learning_rate = (
           tf.where(
@@ -276,7 +392,7 @@ class PairedGANDisen:
           )
 
       )
-      tf.summary.scalar('learning_rate/{}'.format(name), learning_rate)
+      #tf.summary.scalar('learning_rate/{}'.format(name), learning_rate)
 
       learning_step = (
           tf.train.AdamOptimizer(learning_rate, beta1=beta1, name=name)
@@ -284,19 +400,53 @@ class PairedGANDisen:
       )
       return learning_step
 
-    G_optimizer = make_optimizer(G_loss, [self.Ge.variables,self.Gd.variables], name='Adam_G')
-    D_Y_optimizer = make_optimizer(D_Y_loss, self.D_Y.variables, name='Adam_D_Y')
-    F_optimizer =  make_optimizer(F_loss, [self.Fe.variables,
-                                           self.Fd.variables], name='Adam_F')
-    D_X_optimizer = make_optimizer(D_X_loss, self.D_X.variables, name='Adam_D_X')
-    A_optimizer = make_optimizer(A_loss,
-                                 [self.Ge.variables,self.Gd.variables,self.Fe.variables,self.Fd.variables], name='Adam_A')
-    Feat_optimizer = make_optimizer(Feat_loss,
-                                 [self.Ge.variables,self.Gd.variables,self.Fe.variables,self.Fd.variables], name='Adam_Feat')
-    DC_optimizer = make_optimizer(DC_loss, self.DC.variables, name='Adam_DC')
+    optimizer_list = []
+    if 'G_loss' in loss_dict :
+        #G_optimizer = make_optimizer(loss_dict['G_loss'],
+                                     #[self.Ge.variables,self.Gd.variables,self.Gdex.variables,self.Geex.variables], name='Adam_G')
+        G_optimizer = make_optimizer(loss_dict['G_loss'], [self.Ge.variables,self.Gd.variables,self.Gdex.variables], name='Adam_G')
+        optimizer_list.append(G_optimizer)
 
-    with tf.control_dependencies([G_optimizer, D_Y_optimizer, F_optimizer,
-                                  D_X_optimizer, A_optimizer, DC_optimizer]):
+    if 'D_Y_loss' in loss_dict :
+        D_Y_optimizer = make_optimizer(loss_dict['D_Y_loss'], self.D_Y.variables, name='Adam_D_Y')
+        optimizer_list.append(D_Y_optimizer)
+
+    if 'Dex_Y_loss' in loss_dict :
+        Dex_Y_optimizer = make_optimizer(loss_dict['Dex_Y_loss'], self.Dex_Y.variables, name='Adam_Dex_Y')
+        optimizer_list.append(Dex_Y_optimizer)
+
+    if 'F_loss' in loss_dict :
+        #F_optimizer =  make_optimizer(loss_dict['F_loss'], [self.Fe.variables, self.Fd.variables,self.Fdex.variables,self.Feex.variables], name='Adam_F')
+        F_optimizer =  make_optimizer(loss_dict['F_loss'], [self.Fe.variables, self.Fd.variables,self.Fdex.variables], name='Adam_F')
+        optimizer_list.append(F_optimizer)
+
+    if 'D_X_loss' in loss_dict :
+        D_X_optimizer = make_optimizer(loss_dict['D_X_loss'], self.D_X.variables, name='Adam_D_X')
+        optimizer_list.append(D_X_optimizer)
+
+    if 'Dex_X_loss' in loss_dict :
+        Dex_X_optimizer = make_optimizer(loss_dict['Dex_X_loss'], self.Dex_X.variables, name='Adam_Dex_X')
+        optimizer_list.append(Dex_X_optimizer)
+
+    if 'A_loss' in loss_dict :
+        A_optimizer = make_optimizer(loss_dict['A_loss'],
+                                 [self.Ge.variables,self.Gd.variables,self.Fe.variables,self.Fd.variables], name='Adam_A')
+        optimizer_list.append(A_optimizer)
+
+    if 'Feat_loss' in loss_dict :
+        Feat_optimizer = make_optimizer(loss_dict['Feat_loss'],
+                                 [self.Ge.variables,self.Fe.variables], name='Adam_Feat')
+        optimizer_list.append(Feat_optimizer)
+
+    if 'DC_loss' in loss_dict :
+        print("Setting DC optimizer")
+        DC_optimizer = make_optimizer(loss_dict['DC_loss'], [self.DC.variables,
+                                                            self.Ge.variables,
+                                                            self.Fe.variables], name='Adam_DC')
+        optimizer_list.append(DC_optimizer)
+
+
+    with tf.control_dependencies(optimizer_list):
       return tf.no_op(name='optimizers')
 
   def domainClassifier_loss(self, DC, rep, dom):
@@ -305,7 +455,7 @@ class PairedGANDisen:
       return loss
 
 
-  def discriminator_loss(self, D, y, fake_y, use_lsgan=True):
+  def discriminator_loss(self, D, x, y, fake_y, use_lsgan=True):
     """ Note: default: D(y).shape == (batch_size,5,5,1),
                        fake_buffer_size=50, batch_size=1
     Args:
@@ -317,8 +467,8 @@ class PairedGANDisen:
     """
     if use_lsgan:
       # use mean squared error
-      error_real = tf.reduce_mean(tf.squared_difference(D(y), REAL_LABEL))
-      error_fake = tf.reduce_mean(tf.square(D(fake_y)))
+      error_real = tf.reduce_mean(tf.squared_difference(D(x,y), REAL_LABEL))
+      error_fake = tf.reduce_mean(tf.square(D(x,fake_y)))
     else:
       # use cross entropy
       error_real = -tf.reduce_mean(ops.safe_log(D(y)))
@@ -326,12 +476,12 @@ class PairedGANDisen:
     loss = (error_real + error_fake) / 2
     return loss
 
-  def generator_loss(self, D, fake_y, use_lsgan=True):
+  def generator_loss(self, D, x, fake_y, use_lsgan=True):
     """  fool discriminator into believing that G(x) is real
     """
     if use_lsgan:
       # use mean squared error
-      loss = tf.reduce_mean(tf.squared_difference(D(fake_y), REAL_LABEL))
+      loss = tf.reduce_mean(tf.squared_difference(D(x,fake_y), REAL_LABEL))
     else:
       # heuristic, non-saturating loss
       loss = -tf.reduce_mean(ops.safe_log(D(fake_y))) / 2
@@ -427,6 +577,42 @@ class PairedGANDisen:
 
     return image1,image2
 
+  def computeSwapScoreBKG(self, rep_Sy, rep_Ey, autoY):
 
+    bkg_ims_idx = tf.random_uniform([self.batch_size],minval=0,maxval=self.batch_size,dtype=tf.int32)
+    swapScoreBKG = 0
+    #for i in range(0,3):
+    for i in range(0,self.batch_size):
+        s_curr = tf.reshape(rep_Sy[i,:],[1,rep_Sy.shape[1],rep_Sy.shape[2],rep_Sy.shape[3]])
 
+        #print('I:'+str(i)+' paired with:'+str(bkg_ims_idx[i]))
+        # Image to swap cannot be current image
+        while bkg_ims_idx[i] == tf.constant(i):
+            pdb.set_trace()
+            bkf_ims_idx[i] = tf.random_uniform([1],minval=0,maxval=self.batch_size,dtype=tf.int32)
+
+        s_rnd = tf.reshape(rep_Sy[bkg_ims_idx[i],:],[1,rep_Sy.shape[1],rep_Sy.shape[2],rep_Sy.shape[3]])
+        ex_rnd = tf.reshape(rep_Ey[bkg_ims_idx[i],:],[1,rep_Ey.shape[1],rep_Ey.shape[2],rep_Ey.shape[3]])
+        im_swapped = self.Gd(tf.concat([s_curr,ex_rnd],3))
+
+        # Only show first 3
+        if i < 3:
+            tf.summary.image('ZSwap/im_'+str(i)+'_iswapped',utils.batch_convert2int(im_swapped))
+            tf.summary.image('ZSwap/im_'+str(i)+'_orig',utils.batch_convert2int(tf.reshape(autoY[bkg_ims_idx[i],:],
+                                                                        [1,32,32,3])))
+        swapScoreBKG += tf.reduce_mean(tf.abs(autoY[bkg_ims_idx[i],:4,:4,:] -
+                                              im_swapped[0,:4,:4,:]))
+    return swapScoreBKG
+
+    #im1bk2 = self.Gd(tf.concat([s1, ex2],3))
+    #tf.summary.image('X/im1bk2',utils.batch_convert2int(im1bk2))
+
+    #im2bk1 = self.Gd(tf.concat([s2, ex1],3))
+    #tf.summary.image('X/im2bk1', utils.batch_convert2int(im2bk1))
+
+    #im2bk3 = self.Gd(tf.concat([s2, ex3],3))
+    #tf.summary.image('X/im2bk3', utils.batch_convert2int(im2bk3))
+
+    ## Evaluation test on swapped background
+    #swapScoreBKG = tf.reduce_mean(tf.abs(im1bk2[0,:4,:4,:] - autoY[1,:4,:4,:])) + tf.reduce_mean(tf.abs(im2bk1[0,:4,:4,:] - autoY[0,:4,:4,:]))
 

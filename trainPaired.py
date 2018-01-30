@@ -1,5 +1,5 @@
 import tensorflow as tf
-from modelPairedTransFeatures import PairedGANDisen
+from modelPaired import PairedGANDisen
 from reader_paired import ReaderPaired
 from datetime import datetime
 import os
@@ -14,27 +14,21 @@ tf.flags.DEFINE_bool('use_lsgan', True,
                      'use lsgan (mean squared error) or cross entropy loss, default: True')
 tf.flags.DEFINE_string('norm', 'instance',
                        '[instance, batch] use instance norm or batch norm, default: instance')
-tf.flags.DEFINE_integer('lambdaRecon', 0.0,
-                        'weight for forward cycle loss (X->Y->X), default: 10.0')
-tf.flags.DEFINE_integer('lambdaAlign', 1.0,
-                        'weight for backward cycle loss (Y->X->Y), default: 10.0')
-tf.flags.DEFINE_integer('lambdaRev', 1.0,
-                        'weight for backward cycle loss (Y->X->Y), default: 10.0')
 tf.flags.DEFINE_float('learning_rate', 2e-4,
                       'initial learning rate for Adam, default: 0.0002')
 tf.flags.DEFINE_float('beta1', 0.5,
                       'momentum term of Adam, default: 0.5')
 tf.flags.DEFINE_float('pool_size', 50,
                       'size of image buffer that stores previously generated images, default: 50')
-tf.flags.DEFINE_integer('nfS', 64,
+tf.flags.DEFINE_integer('nfs', 16,
                         'number of gen filters in first conv layer, default: 64')
-tf.flags.DEFINE_integer('nfE', 36,
+tf.flags.DEFINE_integer('nfe', 16,
                         'number of gen filters in first conv layer, default: 64')
 tf.flags.DEFINE_string('XY', 'data/tfrecords/domain_MNIST_MNISTC.tfrecords',
                        'XY tfrecords file for training')
 tf.flags.DEFINE_string('load_model', None,
                         'folder of saved model that you wish to continue training (e.g. 20170602-1936), default: None')
-nameNet = 'mnistc_paired_trans'
+nameNet = 'mnistc_paired_size'
 
 def train():
   if FLAGS.load_model is not None:
@@ -55,17 +49,23 @@ def train():
         image_size=FLAGS.image_size,
         use_lsgan=FLAGS.use_lsgan,
         norm=FLAGS.norm,
-        lambdaRecon=FLAGS.lambdaRecon,
-        lambdaAlign=FLAGS.lambdaAlign,
-        lambdaRev=FLAGS.lambdaRev,
         learning_rate=FLAGS.learning_rate,
         beta1=FLAGS.beta1,
-        nfS=FLAGS.nfS,
-        nfE=FLAGS.nfE
+        nfs=FLAGS.nfs,
+        nfe=FLAGS.nfe
     )
-    G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss, fake_y, fake_x = paired_gan.model()
-    optimizers = paired_gan.optimize(G_loss, D_Y_loss, F_loss, D_X_loss,
-                                     A_loss, Feat_loss, DC_loss)
+
+    totalSteps = 40000
+
+    #name_losses = [r'G_loss', 'D_Y_loss', 'Dex_Y_loss', 'F_loss', 'D_X_loss', 'Dex_X_loss', 'A_loss', 'Feat_loss', 'DC_loss']
+
+    loss_dict = paired_gan.model()
+    optimizers = paired_gan.optimize(loss_dict)
+
+
+    #G_loss, D_Y_loss, Dex_Y_loss, F_loss, D_X_loss, Dex_X_loss, A_loss, Feat_loss, DC_loss, fake_y, fake_x, fake_ex_y, fake_ex_x = paired_gan.model()
+    #optimizers = paired_gan.optimize(G_loss, D_Y_loss, Dex_Y_loss, F_loss,
+                                     #D_X_loss, Dex_X_loss, A_loss, Feat_loss, DC_loss)
 
     summary_op = tf.summary.merge_all()
     train_writer = tf.summary.FileWriter(checkpoints_dir, graph)
@@ -89,16 +89,24 @@ def train():
       fake_Y_pool = ImagePool(FLAGS.pool_size)
       fake_X_pool = ImagePool(FLAGS.pool_size)
 
+      fake_ex_Y_pool = ImagePool(FLAGS.pool_size)
+      fake_ex_X_pool = ImagePool(FLAGS.pool_size)
+
+
       while not coord.should_stop():
         # get previously generated images
-        fake_y_val, fake_x_val = sess.run([fake_y, fake_x])
+        fake_y_val, fake_x_val, fake_ex_y_val, fake_ex_x_val = sess.run([loss_dict['fake_y'], loss_dict['fake_x'],
+                  loss_dict['fake_ex_y'], loss_dict['fake_ex_x']])
 
-        train
-        _, G_loss_val, D_Y_loss_val, F_loss_val, D_X_loss_val, A_loss_val, Feat_loss_val, DC_loss_val, summary = (
+        #train
+        _, swapScoreFG_val, swapScoreBKG_val, summary = (
               sess.run(
-                  [optimizers, G_loss, D_Y_loss, F_loss, D_X_loss, A_loss, Feat_loss, DC_loss, summary_op],
+                  [optimizers,
+                   loss_dict['swapScoreFG'], loss_dict['swapScoreBKG'], summary_op],
                   feed_dict={paired_gan.fake_y: fake_Y_pool.query(fake_y_val),
-                             paired_gan.fake_x: fake_X_pool.query(fake_x_val)}
+                             paired_gan.fake_x: fake_X_pool.query(fake_x_val),
+                             paired_gan.fake_ex_y:fake_ex_Y_pool.query(fake_ex_y_val),
+                             paired_gan.fake_ex_x: fake_ex_X_pool.query(fake_ex_x_val)}
               )
         )
 
@@ -107,15 +115,15 @@ def train():
 
         if step % 100 == 0:
           logging.info('-----------Step %d:-------------' % step)
-          logging.info('  G_loss   : {}'.format(G_loss_val))
-          logging.info('  D_Y_loss : {}'.format(D_Y_loss_val))
-          logging.info('  F_loss   : {}'.format(F_loss_val))
-          logging.info('  D_X_loss : {}'.format(D_X_loss_val))
-          logging.info('  A_loss : {}'.format(A_loss_val))
+          logging.info('  swapScoreFG   : {}'.format(swapScoreFG_val))
+          logging.info('  swapScoreBKG   : {}'.format(swapScoreBKG_val))
 
         if step % 10000 == 0:
           save_path = saver.save(sess, checkpoints_dir + "/model.ckpt", global_step=step)
           logging.info("Model saved in file: %s" % save_path)
+
+        if step == totalSteps:
+            coord.request_stop()
 
         step += 1
 
